@@ -68,10 +68,14 @@ def validate_navigation_rules_coverage(ctrl_system):
 
 # Input variables to the Fuzzy System
 # Creates a numerical range that defines all possible values for our variable
-# This represents all possible distance values of the sensor can detect (0-100 units), in steps of 1
-left_distance = ctrl.Antecedent(np.arange(0, 101, 1), 'left_distance')
-center_distance = ctrl.Antecedent(np.arange(0, 101, 1), 'center_distance')
-right_distance = ctrl.Antecedent(np.arange(0, 101, 1), 'right_distance')
+# This represents all possible distance values of the sensor can detect (0-40 units), in steps of 1
+
+# Sensor ranges
+sensor_range = 40
+
+left_distance = ctrl.Antecedent(np.arange(0, sensor_range+1, 1), 'left_distance')
+center_distance = ctrl.Antecedent(np.arange(0, sensor_range+1, 1), 'center_distance')
+right_distance = ctrl.Antecedent(np.arange(0, sensor_range+1, 1), 'right_distance')
 
 # Output variable from the Fuzzy System
 # Range from -90° to 90° (How much to turn left/right/straight)
@@ -88,11 +92,11 @@ right_distance.automf(3,  names=['close', 'medium', 'far'])
 # a: Left corner (where membership begins)
 # b: Peak (where membership = 1.0)
 # c: Right corner (where membership ends)
-turn_angle['sharp_left'] = fuzz.trimf(turn_angle.universe, [-90, -90, -45])
-turn_angle['left'] = fuzz.trimf(turn_angle.universe, [-60, -30, 0])
+turn_angle['sharp_left'] = fuzz.trimf(turn_angle.universe, [45, 90, 90])
+turn_angle['left'] = fuzz.trimf(turn_angle.universe, [0, 30, 60])
 turn_angle['straight'] = fuzz.trimf(turn_angle.universe, [-15, 0, 15])
-turn_angle['right'] = fuzz.trimf(turn_angle.universe, [0, 30, 60])
-turn_angle['sharp_right'] = fuzz.trimf(turn_angle.universe, [45, 90, 90])
+turn_angle['right'] = fuzz.trimf(turn_angle.universe, [-60, -30, 0])
+turn_angle['sharp_right'] = fuzz.trimf(turn_angle.universe, [-90, -90, -45])
 
 #############################################
 # Generating rules
@@ -107,13 +111,13 @@ for i, center in enumerate(category):
                 if left == 'close' and right == 'close':
                     action = 'sharp_left'  # All sides blocked, escape left
                 elif left == 'close' and right == 'medium':
-                    action = 'right'       # Right is somewhat clearer
+                    action = 'sharp_right'       # Right is somewhat clearer
                 elif left == 'close' and right == 'far':
                     action = 'sharp_right'       # Right is clear
                 elif left == 'medium' and right == 'close':
-                    action = 'left'        # Left is somewhat clearer
+                    action = 'sharp_left'        # Left is somewhat clearer
                 elif left == 'medium' and right == 'medium':
-                    action = 'left'        # Both sides medium, choose left
+                    action = 'sharp_left'        # Both sides medium, choose left
                 elif left == 'medium' and right == 'far':
                     action = 'sharp_right'       # Right is clearer
                 elif left == 'far' and right == 'close':
@@ -125,23 +129,23 @@ for i, center in enumerate(category):
             
             elif center == 'medium':
                 if left == 'close' and right == 'close':
-                    action = 'straight'    # Narrow path, go straight carefully
+                    action = 'straight'     # Narrow path, go straight carefully
                 elif left == 'close' and right == 'medium':
-                    action = 'straight'    # Keep course with caution
+                    action = 'right'        # Keep course with caution
                 elif left == 'close' and right == 'far':
                     action = 'sharp_right'       # Favor clearer right side
                 elif left == 'medium' and right == 'close':
-                    action = 'straight'    # Keep course with caution
+                    action = 'left'    # Keep course with caution
                 elif left == 'medium' and right == 'medium':
                     action = 'straight'    # Balanced situation, maintain course
                 elif left == 'medium' and right == 'far':
-                    action = 'straight'    # Slight right favor, but straight
+                    action = 'right'    # Slight right favor, but straight
                 elif left == 'far' and right == 'close':
                     action = 'sharp_left'        # Favor clearer left side
                 elif left == 'far' and right == 'medium':
                     action = 'sharp_left'    # Slight left favor, but straight
                 elif left == 'far' and right == 'far':
-                    action = 'sharp_right'    # Path opening up, maintain course
+                    action = 'sharp_right'    # go to a clearer path
             
             else:  # center == 'far'
                 if left == 'close' and right == 'close':
@@ -204,7 +208,7 @@ goal_size = 5     # Visual size of goal
 # Create obstacles avoiding start and goal areas
 obstacles = []
 obstacle_size = 5
-number_of_obstacles = 5
+number_of_obstacles = 10
 while len(obstacles) < number_of_obstacles:
     obs_x = random.randint(20, 80)
     obs_y = random.randint(20, 80)
@@ -217,10 +221,6 @@ while len(obstacles) < number_of_obstacles:
     if dist_from_start > 25 and dist_from_goal > 25:
         obstacles.append((obs_x, obs_y))
 
-
-
-# Sensor ranges
-sensor_range = 40
 
 def calculate_wall_distance(x, y, sensor_angle, max_range):
     """
@@ -238,25 +238,29 @@ def calculate_wall_distance(x, y, sensor_angle, max_range):
     intersections = []
     
     # Check right wall (x = 100)
-    if dx > 0:  # Sensor pointing right
-        t = (right_wall - x) / dx
-        if t > 0:
-            y_intersect = y + dy * t
-            if bottom_wall <= y_intersect <= top_wall:
-                intersections.append(t)
+    if dx >= 0:                                         # Sensor pointing right
+        if dx == 0:                                     # avoid diving by 0
+            dx += 0.001                                 
+        t = (right_wall - x) / dx                       # distance to reach x = 100
+        if t >= 0:                                       # if robot is in front of the wall
+            y_intersect = y + dy * t                    # Y coordinate
+            if bottom_wall <= y_intersect <= top_wall:  # Y inside limits
+                intersections.append(t)                 # valid intersections
     
     # Check left wall (x = 0)
     if dx < 0:  # Sensor pointing left
         t = (left_wall - x) / dx
-        if t > 0:
+        if t >= 0:
             y_intersect = y + dy * t
             if bottom_wall <= y_intersect <= top_wall:
                 intersections.append(t)
     
     # Check top wall (y = 100)
-    if dy > 0:  # Sensor pointing up
+    if dy >= 0:  # Sensor pointing up
+        if dy == 0:         # avoid diving by 0
+            dx += 0.001
         t = (top_wall - y) / dy
-        if t > 0:
+        if t >= 0:
             x_intersect = x + dx * t
             if left_wall <= x_intersect <= right_wall:
                 intersections.append(t)
@@ -264,17 +268,17 @@ def calculate_wall_distance(x, y, sensor_angle, max_range):
     # Check bottom wall (y = 0)
     if dy < 0:  # Sensor pointing down
         t = (bottom_wall - y) / dy
-        if t > 0:
+        if t >= 0:
             x_intersect = x + dx * t
             if left_wall <= x_intersect <= right_wall:
                 intersections.append(t)
     
     # Return the closest wall intersection within range
     if intersections:
-        closest_wall = min(intersections)
+        closest_wall = min(intersections)    #closest wall
         return min(closest_wall, max_range)
     else:
-        return max_range
+        return max_range                    # There is no walls in that direction
     
     
 def calculate_distances(x, y, angle):
@@ -283,23 +287,19 @@ def calculate_distances(x, y, angle):
     """
     # Sensor configuration
     sensor_angles = [angle + 45, angle, angle - 45]  # Left, Center, Right
-    sensor_range = 40
     sensor_fov = np.radians(30)  # ±30° field of view
 
 
-    distances = [sensor_range, sensor_range, sensor_range]  # Default to max range
+    distances = []  # Default to max range
     
     for i, sensor_angle in enumerate(sensor_angles):
-        min_distance = sensor_range
         rad_angle = np.radians(sensor_angle)
         
         # 1. FIRST: Check for WALLS (environment boundaries)
         wall_distance = calculate_wall_distance(x, y, rad_angle, sensor_range)
-        if wall_distance < min_distance:
-            min_distance = wall_distance
 
         # 2. THEN: Check for OBSTACLES (random objects)
-        
+        obstacle_dist = sensor_range
         for obs_x, obs_y in obstacles:
             # Vector from robot to obstacle
             dx = obs_x - x
@@ -317,12 +317,13 @@ def calculate_distances(x, y, angle):
             # Normalize angle difference to [-π, π]
             angle_diff = (angle_diff + np.pi) % (2 * np.pi) - np.pi
             
-            if abs(angle_diff) <= sensor_fov:
+            if abs(angle_diff) <= sensor_fov and distance_to_obs < obstacle_dist:
                 # Obstacle is detected by this sensor
-                if distance_to_obs < min_distance:
-                    min_distance = distance_to_obs
+                obstacle_dist = distance_to_obs
         
-        distances[i] = min_distance
+        # 3. Take the closer of wall or obstacle
+        min_distance = min(wall_distance, obstacle_dist)
+        distances.append(min_distance)
     
     return distances[0], distances[1], distances[2]  # left, center, right
 
@@ -374,7 +375,7 @@ def plot_fuzzy_output(sim, consequent_name, ax):
 def update(frame):
     global robot_x, robot_y, robot_angle
 
-    sensor_angles = [-45,0,45]
+    sensor_angles = [45,0,-45]
     
     # Calculate distances to obstacles using sensors
     left_dist, center_dist, right_dist = calculate_distances(robot_x, robot_y, robot_angle)
@@ -472,7 +473,7 @@ def update(frame):
     # Check for collision with obstacles
     for obs_x, obs_y in obstacles:
         obs_distance = np.sqrt((robot_x - obs_x)**2 + (robot_y - obs_y)**2)
-        if obs_distance < 7:
+        if obs_distance < 5:
             ax1.text(robot_x, robot_y - 12, "COLLISION!", fontsize=14,
                     color='red', weight='bold', ha='center',
                     bbox=dict(facecolor='white', alpha=0.9, boxstyle='round,pad=0.5'))
