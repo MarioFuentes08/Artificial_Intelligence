@@ -5,74 +5,227 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 import random
 
+# Sensor ranges
+sensor_range = 40
 
-def validate_navigation_rules_coverage(ctrl_system):
-    """Validate that all combinatios are covered"""
 
-    terms = ['close', 'medium', 'far']
-    all_combinations = set()
+def calculate_wall_distance(x, y, rad_sensor_angle, max_range):
+    """
+    Calculate the distance to the nearest wall in the direction of the sensor.
     
-    # Create a set
-    covered_combinations = set() 
+    This function computes the intersection point between a sensor ray (originating
+    from the robot position) and the environment walls, returning the closest
+    valid intersection distance.
+    
+    Parameters
+    ----------
+    x : float
+        The x-coordinate of the robot's current position (0-100)
+    y : float  
+        The y-coordinate of the robot's current position (0-100)
+    rad_sensor_angle : float
+        The sensor angle in RADIANS (0 = right, π/2 = up, π = left, 3π/2 = down)
+    max_range : float
+        The maximum sensor range. Returns this value if no wall is detected.
+    
+    Returns
+    -------
+    float
+        The distance to the closest wall in the sensor direction, capped at max_range.
+        Returns max_range if no wall intersection is found within bounds. 
+    """
+    # Environment boundaries
+    left_wall, right_wall = 0, 100
+    bottom_wall, top_wall = 0, 100
+    
+    # Sensor direction components
+    dx = np.cos(rad_sensor_angle)
+    dy = np.sin(rad_sensor_angle)
+    
+    # Calculate intersection distances with all four walls
+    intersections = []
+    
+    # Check right wall (x = 100)
+    if dx >= 0:                                         # Sensor pointing right
+        if dx == 0:                                     # avoid diving by 0
+            dx += 0.001                                 
+        t = (right_wall - x) / dx                       # distance to reach x = 100
+        if t >= 0:                                       # if robot is in front of the wall
+            y_intersect = y + dy * t                    # Y coordinate
+            if bottom_wall <= y_intersect <= top_wall:  # Y inside limits
+                intersections.append(t)                 # valid intersections
+    
+    # Check left wall (x = 0)
+    if dx < 0:  # Sensor pointing left
+        t = (left_wall - x) / dx
+        if t >= 0:
+            y_intersect = y + dy * t
+            if bottom_wall <= y_intersect <= top_wall:
+                intersections.append(t)
+    
+    # Check top wall (y = 100)
+    if dy >= 0:  # Sensor pointing up
+        if dy == 0:         # avoid diving by 0
+            dx += 0.001
+        t = (top_wall - y) / dy
+        if t >= 0:
+            x_intersect = x + dx * t
+            if left_wall <= x_intersect <= right_wall:
+                intersections.append(t)
+    
+    # Check bottom wall (y = 0)
+    if dy < 0:  # Sensor pointing down
+        t = (bottom_wall - y) / dy
+        if t >= 0:
+            x_intersect = x + dx * t
+            if left_wall <= x_intersect <= right_wall:
+                intersections.append(t)
+    
+    # Return the closest wall intersection within range
+    if intersections:
+        closest_wall = min(intersections)    #closest wall
+        return min(closest_wall, max_range)
+    else:
+        return max_range                    # There is no walls in that direction
+    
+    
+def calculate_distances(x, y, angle):
+    """
+    Calculate distances to obstacles and walls in three sensor directions.
+    
+    This function simulates three ultrasonic sensors (left, center, right)
+    mounted on the robot. It returns the closest distance
+    detected by each sensor, considering both obstacles and environment walls.
+    
+    Parameters
+    ----------
+    x : float
+        The current x-coordinate of the robot (0 to 100)
+    y : float
+        The current y-coordinate of the robot (0 to 100)  
+    angle : float
+        The robot's heading angle in DEGREES (0° = right, 90° = up, 180° = left, 270° = down)
+    
+    Returns
+    -------
+    tuple (float, float, float)
+        A tuple containing three distances in units:
+        - left_distance: Distance to closest obstacle/wall on left sensor (+45°)
+        - center_distance: Distance to closest obstacle/wall on center sensor (0°)  
+        - right_distance: Distance to closest obstacle/wall on right sensor (-45°)
+    """
+    # Sensor configuration
+    sensor_angles = [angle + 45, angle, angle - 45]  # Left, Center, Right
+    sensor_fov = np.radians(30)  # ±30° field of view
 
-    # Generate all possible combinations (3^3 = 27)
-    for center in terms:
-        for left in terms:
-            for right in terms:
-                all_combinations.add((center, left, right))
-     
-    # Analyze covered combinations by the existing rules
-    for rule in ctrl_system.rules:
-        # Extract the rules terms
-        rule_str = str(rule).lower()
-        terms_in_rule = ['temp','temp','temp']
 
+    distances = []  # Default to max range
+    
+    for i, sensor_angle in enumerate(sensor_angles):
+        rad_angle = np.radians(sensor_angle)
         
-        close_term_count  = rule_str.count(terms[0])
-        medium_term_count = rule_str.count(terms[1])
-        far_term_count    = rule_str.count(terms[2])
+        # 1. FIRST: Check for WALLS (environment boundaries)
+        wall_distance = calculate_wall_distance(x, y, rad_angle, sensor_range)
 
-        close_term_index = []
-        medium_term_index = []
-        far_term_index = []
+        # 2. THEN: Check for OBSTACLES (random objects)
+        obstacle_dist = sensor_range
+        for obs_x, obs_y in obstacles:
+            # Vector from robot to obstacle
+            dx = obs_x - x
+            dy = obs_y - y
+            distance_to_obs = np.sqrt(dx**2 + dy**2)
+            
+            # Skip if obstacle is beyond sensor range
+            if distance_to_obs > sensor_range:
+                continue
+                
+            # Calculate angle between sensor direction and obstacle direction
+            obstacle_angle = np.arctan2(dy, dx)
+            angle_diff = obstacle_angle - rad_angle
+            
+            # Normalize angle difference to [-π, π]
+            angle_diff = (angle_diff + np.pi) % (2 * np.pi) - np.pi
+            
+            if abs(angle_diff) <= sensor_fov and distance_to_obs < obstacle_dist:
+                # Obstacle is detected by this sensor
+                obstacle_dist = distance_to_obs
+        
+        # 3. Take the closer of wall or obstacle
+        min_distance = min(wall_distance, obstacle_dist)
+        distances.append(min_distance)
+    
+    return distances[0], distances[1], distances[2]  # left, center, right
 
-        is_close_term = rule_str.find(terms[0])
-        while is_close_term != -1:
-            close_term_index.append(is_close_term)
-            is_close_term = rule_str.find(terms[0], is_close_term + 1)
 
+# Helper function to plot fuzzy output
+def plot_fuzzy_output(sim, consequent_name, ax):
+    """
+    Visualize the fuzzy logic output calculation for a specific consequent variable.
+    
+    This function creates a detailed visualization of the fuzzy inference process,
+    showing membership functions, rule activations, aggregated output, and the
+    final defuzzified value. It's essential for understanding and debugging the
+    fuzzy logic decision-making process.
+    
+    Parameters
+    ----------
+    sim : ControlSystemSimulation
+        The fuzzy logic simulation object containing the current state,
+        rule activations, and computed outputs. Must have already called
+        `compute()` method.
+    consequent_name : str
+        Name of the output variable to visualize (e.g., 'turn_angle').
+        Must match a consequent defined in the control system.
+    ax : matplotlib.axes.Axes
+        The matplotlib axes object where the visualization will be drawn.
+        The function will clear this axes before plotting.
+    
+    Returns
+    -------
+    None
+        The function modifies the provided axes object in-place.
+    """
+    ax.clear()
 
-        is_medium_term = rule_str.find(terms[1])
-        while is_medium_term != -1:
-            medium_term_index.append(is_medium_term)
-            is_medium_term = rule_str.find(terms[1], is_medium_term + 1)
+    # Convert generator to dict {name: consequent}
+    consequents = {c.label: c for c in sim.ctrl.consequents}
+    if consequent_name not in consequents:
+        raise ValueError(
+            f"Consequent '{consequent_name}' not found. "
+            f"Available: {list(consequents.keys())}"
+        )
 
+    consequent = consequents[consequent_name]
 
-        is_far_term = rule_str.find(terms[2])
-        while is_far_term != -1:
-            far_term_index.append(is_far_term)
-            is_far_term = rule_str.find(terms[2], is_far_term + 1)
-      
-        for i in range(close_term_count):
-            terms_in_rule.append(terms[0])
-        for j in range(medium_term_count):
-            terms_in_rule.append(terms[1])
-        for z in range(far_term_count):
-            terms_in_rule.append(terms[2])
+    # Plot all membership functions manually
+    for term_name, mf in consequent.terms.items():
+        ax.plot(
+            consequent.universe,
+            mf.mf, 
+            label=str(term_name)
+        )
 
-        if len(terms_in_rule) == 3:
-            covered_combinations.add(tuple(terms_in_rule))        
-    # Find missing combinations
-    missing = all_combinations - covered_combinations
-    return missing
+    # Plot crisp (defuzzified) value if available
+    if consequent_name in sim.output:
+        defuzz_value = sim.output[consequent_name]
+        ax.axvline(
+            x=defuzz_value,
+            color="red",
+            linestyle="--",
+            linewidth=2.5,
+            label=f"Decision: {defuzz_value:.2f}"
+        )
+
+    ax.set_title(f"Fuzzy Output: {consequent_name}", fontsize=12, fontweight="bold")
+    ax.set_xlabel("Universe")
+    ax.set_ylabel("Membership Degree")
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="upper right")
+
 
 # Input variables to the Fuzzy System
 # Creates a numerical range that defines all possible values for our variable
 # This represents all possible distance values of the sensor can detect (0-40 units), in steps of 1
-
-# Sensor ranges
-sensor_range = 40
-
 left_distance = ctrl.Antecedent(np.arange(0, sensor_range+1, 1), 'left_distance')
 center_distance = ctrl.Antecedent(np.arange(0, sensor_range+1, 1), 'center_distance')
 right_distance = ctrl.Antecedent(np.arange(0, sensor_range+1, 1), 'right_distance')
@@ -177,14 +330,6 @@ print(f"Total rules geneated: {len(rules)}/27")
 navigation_ctrl = ctrl.ControlSystem(rules)  #Creates the fuzzy logic engine of the system.
 navigation_system = ctrl.ControlSystemSimulation(navigation_ctrl)  #Creates a simulation instance for making specific calculations
 
-# Verify whether there is no missing rules, if so, stop execution
-print("=" * 20)
-print("Verify rules")
-print("=" * 20)
-#missing_rule = validate_navigation_rules_coverage(navigation_ctrl)
-#print(f"Missing combinations: {missing_rule} \n")
-#print(f"There are {len(missing_rule)} missing combinations")
-#exit()
 
 print("Fuzzy control system created successfully!")
 
@@ -222,157 +367,27 @@ while len(obstacles) < number_of_obstacles:
         obstacles.append((obs_x, obs_y))
 
 
-def calculate_wall_distance(x, y, sensor_angle, max_range):
-    """
-    Calculate distance to the nearest wall in the sensor direction
-    """
-    # Environment boundaries
-    left_wall, right_wall = 0, 100
-    bottom_wall, top_wall = 0, 100
-    
-    # Sensor direction components
-    dx = np.cos(sensor_angle)
-    dy = np.sin(sensor_angle)
-    
-    # Calculate intersection distances with all four walls
-    intersections = []
-    
-    # Check right wall (x = 100)
-    if dx >= 0:                                         # Sensor pointing right
-        if dx == 0:                                     # avoid diving by 0
-            dx += 0.001                                 
-        t = (right_wall - x) / dx                       # distance to reach x = 100
-        if t >= 0:                                       # if robot is in front of the wall
-            y_intersect = y + dy * t                    # Y coordinate
-            if bottom_wall <= y_intersect <= top_wall:  # Y inside limits
-                intersections.append(t)                 # valid intersections
-    
-    # Check left wall (x = 0)
-    if dx < 0:  # Sensor pointing left
-        t = (left_wall - x) / dx
-        if t >= 0:
-            y_intersect = y + dy * t
-            if bottom_wall <= y_intersect <= top_wall:
-                intersections.append(t)
-    
-    # Check top wall (y = 100)
-    if dy >= 0:  # Sensor pointing up
-        if dy == 0:         # avoid diving by 0
-            dx += 0.001
-        t = (top_wall - y) / dy
-        if t >= 0:
-            x_intersect = x + dx * t
-            if left_wall <= x_intersect <= right_wall:
-                intersections.append(t)
-    
-    # Check bottom wall (y = 0)
-    if dy < 0:  # Sensor pointing down
-        t = (bottom_wall - y) / dy
-        if t >= 0:
-            x_intersect = x + dx * t
-            if left_wall <= x_intersect <= right_wall:
-                intersections.append(t)
-    
-    # Return the closest wall intersection within range
-    if intersections:
-        closest_wall = min(intersections)    #closest wall
-        return min(closest_wall, max_range)
-    else:
-        return max_range                    # There is no walls in that direction
-    
-    
-def calculate_distances(x, y, angle):
-    """
-    Calculate distances to obstacles in three directions: left, center, right
-    """
-    # Sensor configuration
-    sensor_angles = [angle + 45, angle, angle - 45]  # Left, Center, Right
-    sensor_fov = np.radians(30)  # ±30° field of view
-
-
-    distances = []  # Default to max range
-    
-    for i, sensor_angle in enumerate(sensor_angles):
-        rad_angle = np.radians(sensor_angle)
-        
-        # 1. FIRST: Check for WALLS (environment boundaries)
-        wall_distance = calculate_wall_distance(x, y, rad_angle, sensor_range)
-
-        # 2. THEN: Check for OBSTACLES (random objects)
-        obstacle_dist = sensor_range
-        for obs_x, obs_y in obstacles:
-            # Vector from robot to obstacle
-            dx = obs_x - x
-            dy = obs_y - y
-            distance_to_obs = np.sqrt(dx**2 + dy**2)
-            
-            # Skip if obstacle is beyond sensor range
-            if distance_to_obs > sensor_range:
-                continue
-                
-            # Calculate angle between sensor direction and obstacle direction
-            obstacle_angle = np.arctan2(dy, dx)
-            angle_diff = obstacle_angle - rad_angle
-            
-            # Normalize angle difference to [-π, π]
-            angle_diff = (angle_diff + np.pi) % (2 * np.pi) - np.pi
-            
-            if abs(angle_diff) <= sensor_fov and distance_to_obs < obstacle_dist:
-                # Obstacle is detected by this sensor
-                obstacle_dist = distance_to_obs
-        
-        # 3. Take the closer of wall or obstacle
-        min_distance = min(wall_distance, obstacle_dist)
-        distances.append(min_distance)
-    
-    return distances[0], distances[1], distances[2]  # left, center, right
-
-
-# Helper function to plot fuzzy output
-def plot_fuzzy_output(sim, consequent_name, ax):
-    """
-    Plot fuzzy output with membership functions and defuzzified decision line.
-    """
-    ax.clear()
-
-    # Convert generator to dict {name: consequent}
-    consequents = {c.label: c for c in sim.ctrl.consequents}
-    if consequent_name not in consequents:
-        raise ValueError(
-            f"Consequent '{consequent_name}' not found. "
-            f"Available: {list(consequents.keys())}"
-        )
-
-    consequent = consequents[consequent_name]
-
-    # Plot all membership functions manually
-    for term_name, mf in consequent.terms.items():
-        ax.plot(
-            consequent.universe,
-            mf.mf, 
-            label=str(term_name)
-        )
-
-    # Plot crisp (defuzzified) value if available
-    if consequent_name in sim.output:
-        defuzz_value = sim.output[consequent_name]
-        ax.axvline(
-            x=defuzz_value,
-            color="red",
-            linestyle="--",
-            linewidth=2.5,
-            label=f"Decision: {defuzz_value:.2f}"
-        )
-
-    ax.set_title(f"Fuzzy Output: {consequent_name}", fontsize=12, fontweight="bold")
-    ax.set_xlabel("Universe")
-    ax.set_ylabel("Membership Degree")
-    ax.grid(True, alpha=0.3)
-    ax.legend(loc="upper right")
-
-
-
 def update(frame):
+    """
+    Update function for the robot navigation animation.
+    
+    This function is called repeatedly by matplotlib's FuncAnimation to update
+    each frame of the simulation. It handles robot movement, sensor readings,
+    fuzzy logic decision-making, and visualization updates.
+    
+    Parameters
+    ----------
+    frame : int
+        The current frame number of the animation. Used for display purposes
+        and to control animation timing.
+    
+    Returns
+    -------
+    tuple of matplotlib.axes.Axes
+        Returns (ax1, ax2) - the two axes objects containing the updated plots.
+        This return is required by FuncAnimation to refresh the display.
+
+    """
     global robot_x, robot_y, robot_angle
 
     sensor_angles = [45,0,-45]
